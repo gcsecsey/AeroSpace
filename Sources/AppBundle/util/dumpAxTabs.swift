@@ -19,10 +19,12 @@ protocol AxTabReading {
 struct AxTabDumpLimits {
     let maxDepth: Int
     let maxNodes: Int
+    let maxFailures: Int
 
-    init(maxDepth: Int = 12, maxNodes: Int = 500) {
+    init(maxDepth: Int = 12, maxNodes: Int = 500, maxFailures: Int = 20) {
         self.maxDepth = maxDepth
         self.maxNodes = maxNodes
+        self.maxFailures = maxFailures
     }
 }
 
@@ -32,7 +34,7 @@ func dumpAxTabs<Reader: AxTabReading>(
     limits: AxTabDumpLimits = .init(),
 ) -> [String: Json] {
     var dumper = AxTabDumper(reader: reader, limits: limits)
-    dumper.visit(root, path: [], depth: 0)
+    dumper.visitBreadthFirst(root)
     return dumper.result
 }
 
@@ -120,35 +122,41 @@ private struct AxTabDumper<Reader: AxTabReading> {
     var truncationReasons: [String] = []
 
     var result: [String: Json] {
-        [
+        let sortedFailures = failures.sorted(by: { $0.isBefore($1) })
+        let failureDetails = Array(sortedFailures.prefix(max(0, limits.maxFailures)))
+        return [
             "visitedNodeCount": .int(observedNodes.count),
             "truncated": .bool(!truncationReasons.isEmpty),
             "truncationReasons": .array(truncationReasons.map(Json.string)),
             "groups": .array(groups),
-            "failures": .array(failures.sorted(by: { $0.isBefore($1) }).map(\.json)),
+            "failureCount": .int(failures.count),
+            "omittedFailureCount": .int(failures.count - failureDetails.count),
+            "failures": .array(failureDetails.map(\.json)),
         ]
     }
 
-    mutating func visit(_ node: Reader.Node, path: [Int], depth: Int) {
-        guard !traversedNodes.contains(node) else { return }
-        guard observe(node) else { return }
-        traversedNodes.insert(node)
-        let role = readJson(node, attribute: kAXRoleAttribute, path: path)
-        let children = readElements(node, attribute: kAXChildrenAttribute, path: path)
-        if role == .string(kAXTabGroupRole) {
-            groups.append(.dict(groupSnapshot(node, path: path, role: role, children: children)))
-        }
-        if depth >= limits.maxDepth {
-            if !children.isEmpty {
-                addTruncationReason("maximum depth \(limits.maxDepth) reached")
+    mutating func visitBreadthFirst(_ root: Reader.Node) {
+        var queue: [(node: Reader.Node, path: [Int], depth: Int)] = [(root, [], 0)]
+        var nextIndex = 0
+        while nextIndex < queue.count {
+            let (node, path, depth) = queue[nextIndex]
+            nextIndex += 1
+            guard !traversedNodes.contains(node) else { continue }
+            guard observe(node) else { break }
+            traversedNodes.insert(node)
+            let role = readJson(node, attribute: kAXRoleAttribute, path: path)
+            let children = readTraversalChildren(node, path: path)
+            if role == .string(kAXTabGroupRole) {
+                groups.append(.dict(groupSnapshot(node, path: path, role: role, children: children)))
             }
-            return
-        }
-        for (index, child) in children.enumerated() {
-            visit(child, path: path + [index], depth: depth + 1)
-            if observedNodes.count >= limits.maxNodes, index < children.indices.last.orDie() {
-                addTruncationReason("maximum node count \(limits.maxNodes) reached")
-                break
+            if depth >= limits.maxDepth {
+                if !children.isEmpty {
+                    addTruncationReason("maximum depth \(limits.maxDepth) reached")
+                }
+                continue
+            }
+            for (childIndex, child) in children.enumerated() {
+                queue.append((child, path + [childIndex], depth + 1))
             }
         }
     }
@@ -274,6 +282,21 @@ private struct AxTabDumper<Reader: AxTabReading> {
             case .success(let value): return value
             case .failure(let error):
                 failures.append(.init(path: path, operation: "readAttribute", attribute: attribute, error: error))
+                return []
+        }
+    }
+
+    mutating func readTraversalChildren(_ node: Reader.Node, path: [Int]) -> [Reader.Node] {
+        switch reader.elements(of: node, attribute: kAXChildrenAttribute) {
+            case .success(let value): return value
+            case .failure(AXError.noValue.repr), .failure(AXError.attributeUnsupported.repr): return []
+            case .failure(let error):
+                failures.append(.init(
+                    path: path,
+                    operation: "readAttribute",
+                    attribute: kAXChildrenAttribute,
+                    error: error,
+                ))
                 return []
         }
     }

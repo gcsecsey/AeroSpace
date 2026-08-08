@@ -65,6 +65,41 @@ final class DumpAxTabsTest: XCTestCase {
         assertEquals(result["failures"], .array([]))
     }
 
+    func testVisitsShallowTabGroupBeforeDeepContentExhaustsNodeLimit() {
+        let reader = StubAxTabReader(nodes: [
+            0: .init(
+                attributes: [kAXRoleAttribute: .string(kAXWindowRole)],
+                elements: [kAXChildrenAttribute: [1, 2]],
+            ),
+            1: .init(
+                attributes: [kAXRoleAttribute: .string(kAXGroupRole)],
+                elements: [kAXChildrenAttribute: [3]],
+            ),
+            2: .init(
+                attributes: [kAXRoleAttribute: .string(kAXTabGroupRole)],
+                elements: [
+                    kAXChildrenAttribute: [],
+                    kAXTabsAttribute: [],
+                    kAXSelectedChildrenAttribute: [],
+                ],
+            ),
+            3: .init(
+                attributes: [kAXRoleAttribute: .string(kAXGroupRole)],
+                elements: [kAXChildrenAttribute: [4]],
+            ),
+            4: .init(
+                attributes: [kAXRoleAttribute: .string(kAXGroupRole)],
+                elements: [kAXChildrenAttribute: []],
+            ),
+        ])
+
+        let result = dumpAxTabs(root: 0, reader: reader, limits: .init(maxNodes: 3))
+
+        assertEquals(result["visitedNodeCount"], .int(3))
+        assertEquals(result["truncated"], .bool(true))
+        assertEquals(result["groups"]?.asArrayOrDie.first?.asDictOrDie["path"], .array([.int(1)]))
+    }
+
     func testStopsAtNodeLimit() {
         let reader = StubAxTabReader(nodes: [
             0: .init(
@@ -163,6 +198,30 @@ final class DumpAxTabsTest: XCTestCase {
         )
     }
 
+    func testCapsFailureDetailsButPreservesFailureCounts() {
+        let reader = StubAxTabReader(nodes: [
+            0: .init(
+                attributes: [kAXRoleAttribute: .string(kAXTabGroupRole)],
+                elements: [
+                    kAXChildrenAttribute: [],
+                    kAXTabsAttribute: [],
+                    kAXSelectedChildrenAttribute: [],
+                ],
+                attributeNamesError: "attributeUnsupported",
+                actionNamesError: "cannotComplete",
+            ),
+        ])
+
+        let result = dumpAxTabs(root: 0, reader: reader, limits: .init(maxFailures: 1))
+
+        assertEquals(result["failureCount"], .int(2))
+        assertEquals(result["omittedFailureCount"], .int(1))
+        assertEquals(
+            result["failures"],
+            .array([failureJson(path: [], operation: "listActions", error: "cannotComplete")]),
+        )
+    }
+
     func testTruncatesUnknownScalarDescriptionsAt512Characters() {
         let value = LongAxDescription()
 
@@ -184,6 +243,21 @@ final class DumpAxTabsTest: XCTestCase {
 
         assertEquals(result["visitedNodeCount"], .int(1))
         assertEquals(result["groups"], .array([]))
+    }
+
+    func testTreatsMissingChildrenAsLeafWithoutFailureNoise() {
+        let reader = StubAxTabReader(nodes: [
+            0: .init(
+                attributes: [kAXRoleAttribute: .string(kAXWindowRole)],
+                elements: [:],
+            ),
+        ])
+
+        let result = dumpAxTabs(root: 0, reader: reader)
+
+        assertEquals(result["visitedNodeCount"], .int(1))
+        assertEquals(result["groups"], .array([]))
+        assertEquals(result["failures"], .array([]))
     }
 
     func testKeepsUnmatchedAXTabsWithNullChildIndex() {

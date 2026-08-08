@@ -41,6 +41,9 @@ include::util/conditional-options-header.adoc[]
 Print a bounded Accessibility hierarchy report focused on native macOS tab groups.
 Without `--window-id`, inspect the currently focused window.
 This option is one-shot and does not start or stop interactive recording.
+The traversal checks shallow window chrome before deeper document contents.
+Routine leaf results are omitted, and detailed Accessibility failures are capped
+while their total count is retained.
 
 --window-id <window-id>::
 Print debug information of the specified window right away.

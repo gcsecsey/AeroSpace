@@ -84,6 +84,8 @@ Aero.AXTabDump
   truncated
   truncationReasons
   groups
+  failureCount
+  omittedFailureCount
   failures
 ```
 
