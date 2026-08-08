@@ -26,4 +26,23 @@ final class DebugWindowsCommandTest: XCTestCase {
             .tabs(42),
         )
     }
+
+    func testTabDebugJsonIncludesTargetContext() {
+        let tabDump: [String: Json] = ["groups": .array([])]
+
+        assertEquals(
+            makeWindowTabDebugJson(
+                windowId: 42,
+                appBundleId: "com.example.Tabbed",
+                pid: 123,
+                tabDump: tabDump,
+            ),
+            [
+                "Aero.axWindowId": .int(42),
+                "Aero.App.appBundleId": .string("com.example.Tabbed"),
+                "Aero.App.pid": .int(123),
+                "Aero.AXTabDump": .dict(tabDump),
+            ],
+        )
+    }
 }

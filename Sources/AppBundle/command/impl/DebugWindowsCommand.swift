@@ -39,8 +39,26 @@ struct DebugWindowsCommand: Command {
 
     func run(_ env: CmdEnv, _ io: CmdIo) async -> BinaryExitCode {
         switch args.mode {
-            case .tabs:
-                return .fail(io.err(bugPrompt("Tab diagnostics are not implemented")))
+            case .tabs(let windowId):
+                let window: Window
+                if let windowId {
+                    guard let foundWindow = Window.get(byId: windowId) else {
+                        return .fail(io.err("Can't find window with the specified window-id: \(windowId)"))
+                    }
+                    window = foundWindow
+                } else {
+                    guard let target = args.resolveTargetOrReportError(env, io) else { return .fail }
+                    guard let focusedWindow = target.windowOrNil else { return .fail(io.err(noWindowIsFocused)) }
+                    window = focusedWindow
+                }
+                guard let window = window as? MacWindow else { return .fail(io.err(bugPrompt())) }
+                do {
+                    io.out(try await dumpWindowTabDebugInfo(window, .nonCancellable) + "\n")
+                    io.out(disclaimer)
+                    return .succ
+                } catch {
+                    return .fail(io.err(bugPrompt(String(describing: error))))
+                }
             case .window(let windowId):
                 guard let window = Window.get(byId: windowId) else {
                     return .fail(io.err("Can't find window with the specified window-id: \(windowId)"))
@@ -94,6 +112,38 @@ struct DebugWindowsCommand: Command {
 }
 
 @MainActor
+private func dumpWindowTabDebugInfo(_ window: MacWindow, _ cm: CancellationMode) async throws -> String {
+    makeWindowTabDebugJson(
+        windowId: window.windowId,
+        appBundleId: window.app.rawAppBundleId,
+        pid: window.app.pid,
+        tabDump: try await window.dumpAxTabInfo(cm),
+    )
+    .encodedForDebugWindow(appBundleId: window.app.rawAppBundleId, windowId: window.windowId)
+}
+
+func makeWindowTabDebugJson(
+    windowId: UInt32,
+    appBundleId: String?,
+    pid: Int32,
+    tabDump: [String: Json],
+) -> [String: Json] {
+    [
+        "Aero.axWindowId": .int(windowId),
+        "Aero.App.appBundleId": .stringOrNull(appBundleId),
+        "Aero.App.pid": .int(Int(pid)),
+        "Aero.AXTabDump": .dict(tabDump),
+    ]
+}
+
+private extension [String: Json] {
+    func encodedForDebugWindow(appBundleId: String?, windowId: UInt32) -> String {
+        JSONEncoder.aeroSpaceDefault.encodeToString(self).prettyDescription
+            .prefixLines(with: "\(appBundleId ?? "nil-bundle-id").\(windowId) ||| ")
+    }
+}
+
+@MainActor
 private func dumpWindowDebugInfo(_ window: Window, _ cm: CancellationMode) async throws -> String {
     let window = window as! MacWindow
     let appInfoDic = window.macApp.nsApp.bundleURL.flatMap { Bundle.init(url: $0) }?.infoDictionary ?? [:]
@@ -127,8 +177,7 @@ private func dumpWindowDebugInfo(_ window: Window, _ cm: CancellationMode) async
     }
     result["Aero.on-window-detected"] = .array(matchingCallbacks)
 
-    return JSONEncoder.aeroSpaceDefault.encodeToString(result).prettyDescription
-        .prefixLines(with: "\(window.app.rawAppBundleId ?? "nil-bundle-id").\(window.windowId) ||| ")
+    return result.encodedForDebugWindow(appBundleId: window.app.rawAppBundleId, windowId: window.windowId)
 }
 
 @MainActor

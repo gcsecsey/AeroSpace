@@ -232,6 +232,12 @@ final class MacApp: AbstractApp {
         } ?? [:]
     }
 
+    func dumpWindowAxTabInfo(windowId: UInt32, _ cm: CancellationMode) async throws -> [String: Json] {
+        try await withWindow(windowId, cm) { window, job in
+            dumpAxTabs(window)
+        } ?? [:]
+    }
+
     func dumpAppAxInfo(_ cm: CancellationMode) async throws -> [String: Json] {
         try await thread?.runInLoop(cm) { [axApp] job in
             dumpAxRecursive(axApp.threadGuarded, .app)
