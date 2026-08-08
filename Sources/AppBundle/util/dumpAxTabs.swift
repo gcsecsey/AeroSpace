@@ -113,15 +113,15 @@ private struct LiveAxTabReader: AxTabReading {
 private struct AxTabDumper<Reader: AxTabReading> {
     let reader: Reader
     let limits: AxTabDumpLimits
-    var visitedNodes: Set<Reader.Node> = []
-    var visitedNodeCount = 0
+    var observedNodes: Set<Reader.Node> = []
+    var traversedNodes: Set<Reader.Node> = []
     var groups: [Json] = []
     var failures: [AxTabFailure] = []
     var truncationReasons: [String] = []
 
     var result: [String: Json] {
         [
-            "visitedNodeCount": .int(visitedNodeCount),
+            "visitedNodeCount": .int(observedNodes.count),
             "truncated": .bool(!truncationReasons.isEmpty),
             "truncationReasons": .array(truncationReasons.map(Json.string)),
             "groups": .array(groups),
@@ -130,13 +130,9 @@ private struct AxTabDumper<Reader: AxTabReading> {
     }
 
     mutating func visit(_ node: Reader.Node, path: [Int], depth: Int) {
-        guard !visitedNodes.contains(node) else { return }
-        guard visitedNodeCount < limits.maxNodes else {
-            addTruncationReason("maximum node count \(limits.maxNodes) reached")
-            return
-        }
-        visitedNodes.insert(node)
-        visitedNodeCount += 1
+        guard !traversedNodes.contains(node) else { return }
+        guard observe(node) else { return }
+        traversedNodes.insert(node)
         let role = readJson(node, attribute: kAXRoleAttribute, path: path)
         let children = readElements(node, attribute: kAXChildrenAttribute, path: path)
         if role == .string(kAXTabGroupRole) {
@@ -150,11 +146,21 @@ private struct AxTabDumper<Reader: AxTabReading> {
         }
         for (index, child) in children.enumerated() {
             visit(child, path: path + [index], depth: depth + 1)
-            if visitedNodeCount >= limits.maxNodes, index < children.indices.last.orDie() {
+            if observedNodes.count >= limits.maxNodes, index < children.indices.last.orDie() {
                 addTruncationReason("maximum node count \(limits.maxNodes) reached")
                 break
             }
         }
+    }
+
+    mutating func observe(_ node: Reader.Node) -> Bool {
+        if observedNodes.contains(node) { return true }
+        guard observedNodes.count < limits.maxNodes else {
+            addTruncationReason("maximum node count \(limits.maxNodes) reached")
+            return false
+        }
+        observedNodes.insert(node)
+        return true
     }
 
     mutating func addTruncationReason(_ reason: String) {
@@ -184,10 +190,10 @@ private struct AxTabDumper<Reader: AxTabReading> {
             "value": readOptionalJson(node, attribute: kAXValueAttribute, advertisedBy: attributeNames, path: path),
             "attributeNames": .array(attributeNames.sorted().map(Json.string)),
             "actionNames": .array(actionNames.sorted().map(Json.string)),
-            "tabs": .array(tabs.map { referencedElementSnapshot($0, children: children, groupPath: path) }),
-            "selectedChildren": .array(selectedChildren.map { referencedElementSnapshot($0, children: children, groupPath: path) }),
-            "children": .array(children.enumerated().map {
-                .dict(elementSnapshot($0.element, childIndex: $0.offset, path: path + [$0.offset]))
+            "tabs": .array(tabs.compactMap { referencedElementSnapshot($0, children: children, groupPath: path) }),
+            "selectedChildren": .array(selectedChildren.compactMap { referencedElementSnapshot($0, children: children, groupPath: path) }),
+            "children": .array(children.enumerated().compactMap {
+                elementSnapshot($0.element, childIndex: $0.offset, path: path + [$0.offset]).map(Json.dict)
             }),
         ]
     }
@@ -196,17 +202,18 @@ private struct AxTabDumper<Reader: AxTabReading> {
         _ node: Reader.Node,
         children: [Reader.Node],
         groupPath: [Int],
-    ) -> Json {
+    ) -> Json? {
         let childIndex = children.firstIndex(of: node)
         let path = childIndex.map { groupPath + [$0] } ?? groupPath
-        return .dict(elementSnapshot(node, childIndex: childIndex, path: path))
+        return elementSnapshot(node, childIndex: childIndex, path: path).map(Json.dict)
     }
 
     mutating func elementSnapshot(
         _ node: Reader.Node,
         childIndex: Int?,
         path: [Int],
-    ) -> [String: Json] {
+    ) -> [String: Json]? {
+        guard observe(node) else { return nil }
         let attributeNames = readAttributeNames(node, path: path)
         let actionNames = readActionNames(node, path: path)
         return [

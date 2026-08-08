@@ -240,6 +240,40 @@ final class DumpAxTabsTest: XCTestCase {
             .array([failureJson(path: [0], operation: "listAttributes", error: "cannotComplete")]),
         )
     }
+
+    func testNodeLimitAlsoCapsTabEvidenceArrays() {
+        let reader = StubAxTabReader(nodes: [
+            0: .init(
+                attributes: [kAXRoleAttribute: .string(kAXTabGroupRole)],
+                elements: [
+                    kAXChildrenAttribute: [1, 2, 3],
+                    kAXTabsAttribute: [1, 2, 3],
+                    kAXSelectedChildrenAttribute: [3],
+                ],
+            ),
+            1: .init(
+                attributes: [kAXRoleAttribute: .string(kAXRadioButtonRole)],
+                elements: [kAXChildrenAttribute: []],
+            ),
+            2: .init(
+                attributes: [kAXRoleAttribute: .string(kAXRadioButtonRole)],
+                elements: [kAXChildrenAttribute: []],
+            ),
+            3: .init(
+                attributes: [kAXRoleAttribute: .string(kAXRadioButtonRole)],
+                elements: [kAXChildrenAttribute: []],
+            ),
+        ])
+
+        let result = dumpAxTabs(root: 0, reader: reader, limits: .init(maxNodes: 2))
+        let group = result["groups"]?.asArrayOrDie.first?.asDictOrDie
+
+        assertEquals(result["visitedNodeCount"], .int(2))
+        assertEquals(result["truncated"], .bool(true))
+        assertEquals(group?["children"]?.asArrayOrDie.count, 1)
+        assertEquals(group?["tabs"]?.asArrayOrDie.count, 1)
+        assertEquals(group?["selectedChildren"]?.asArrayOrDie.count, 0)
+    }
 }
 
 private struct StubAxTabReader: AxTabReading {
