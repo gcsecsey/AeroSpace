@@ -106,7 +106,7 @@ struct DebugWindowsCommand: Command {
                         debugWindowsState = .notRecording
                         debugWindowsLog = [:]
                         return .fail
-                    }
+                }
         }
     }
 }
@@ -136,8 +136,8 @@ func makeWindowTabDebugJson(
     ]
 }
 
-private extension [String: Json] {
-    func encodedForDebugWindow(appBundleId: String?, windowId: UInt32) -> String {
+extension [String: Json] {
+    fileprivate func encodedForDebugWindow(appBundleId: String?, windowId: UInt32) -> String {
         JSONEncoder.aeroSpaceDefault.encodeToString(self).prettyDescription
             .prefixLines(with: "\(appBundleId ?? "nil-bundle-id").\(windowId) ||| ")
     }

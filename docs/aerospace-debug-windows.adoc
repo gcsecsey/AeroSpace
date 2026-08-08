@@ -2,14 +2,14 @@
 include::util/man-attributes.adoc[]
 :manname: aerospace-debug-windows
 // tag::purpose[]
-:manpurpose: Interactive command to record Accessibility API debug information to create bug reports
+:manpurpose: Record Accessibility API debug information or inspect native macOS tab groups
 // end::purpose[]
 
 // =========================================================== Synopsis
 == Synopsis
 [verse]
 // tag::synopsis[]
-aerospace debug-windows [-h|--help] [--window-id <window-id>]
+aerospace debug-windows [-h|--help] [--tabs] [--window-id <window-id>]
 
 // end::synopsis[]
 
@@ -36,6 +36,11 @@ The only intended use case is to report bugs about incorrect windows handling.
 include::util/conditional-options-header.adoc[]
 
 -h, --help:: Print help
+
+--tabs::
+Print a bounded Accessibility hierarchy report focused on native macOS tab groups.
+Without `--window-id`, inspect the currently focused window.
+This option is one-shot and does not start or stop interactive recording.
 
 --window-id <window-id>::
 Print debug information of the specified window right away.

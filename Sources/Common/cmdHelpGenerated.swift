@@ -17,7 +17,7 @@ let config_help_generated = """
        OR: config [-h|--help] --config-path
     """
 let debug_windows_help_generated = """
-    USAGE: debug-windows [-h|--help] [--window-id <window-id>]
+    USAGE: debug-windows [-h|--help] [--tabs] [--window-id <window-id>]
     """
 let echo_help_generated = """
     USAGE: echo [-h|--help] [--stderr] [--window-id <window-id>] -- <string>...

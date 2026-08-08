@@ -313,8 +313,8 @@ private func failureJson(path: [Int], operation: String, attribute: String? = ni
     ])
 }
 
-private extension Json {
-    var asArrayOrDie: [Json] {
+extension Json {
+    fileprivate var asArrayOrDie: [Json] {
         if case .array(let value) = self { return value }
         return dieT("\(self) is not an array")
     }
