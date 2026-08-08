@@ -116,6 +116,7 @@ private struct AxTabDumper<Reader: AxTabReading> {
     let reader: Reader
     let limits: AxTabDumpLimits
     var observedNodes: Set<Reader.Node> = []
+    var scheduledNodes: Set<Reader.Node> = []
     var traversedNodes: Set<Reader.Node> = []
     var groups: [Json] = []
     var failures: [AxTabFailure] = []
@@ -136,29 +137,44 @@ private struct AxTabDumper<Reader: AxTabReading> {
     }
 
     mutating func visitBreadthFirst(_ root: Reader.Node) {
-        var queue: [(node: Reader.Node, path: [Int], depth: Int)] = [(root, [], 0)]
+        var queue: [(node: Reader.Node, path: [Int], depth: Int)] = []
+        guard schedule(root, path: [], depth: 0, queue: &queue) else { return }
         var nextIndex = 0
         while nextIndex < queue.count {
             let (node, path, depth) = queue[nextIndex]
             nextIndex += 1
             guard !traversedNodes.contains(node) else { continue }
-            guard observe(node) else { break }
             traversedNodes.insert(node)
             let role = readJson(node, attribute: kAXRoleAttribute, path: path)
             let children = readTraversalChildren(node, path: path)
-            if role == .string(kAXTabGroupRole) {
-                groups.append(.dict(groupSnapshot(node, path: path, role: role, children: children)))
-            }
             if depth >= limits.maxDepth {
                 if !children.isEmpty {
                     addTruncationReason("maximum depth \(limits.maxDepth) reached")
                 }
-                continue
+            } else {
+                for (childIndex, child) in children.enumerated() {
+                    guard schedule(child, path: path + [childIndex], depth: depth + 1, queue: &queue) else {
+                        break
+                    }
+                }
             }
-            for (childIndex, child) in children.enumerated() {
-                queue.append((child, path + [childIndex], depth + 1))
+            if role == .string(kAXTabGroupRole) {
+                groups.append(.dict(groupSnapshot(node, path: path, role: role, children: children)))
             }
         }
+    }
+
+    mutating func schedule(
+        _ node: Reader.Node,
+        path: [Int],
+        depth: Int,
+        queue: inout [(node: Reader.Node, path: [Int], depth: Int)],
+    ) -> Bool {
+        if scheduledNodes.contains(node) { return true }
+        guard observe(node) else { return false }
+        scheduledNodes.insert(node)
+        queue.append((node, path, depth))
+        return true
     }
 
     mutating func observe(_ node: Reader.Node) -> Bool {

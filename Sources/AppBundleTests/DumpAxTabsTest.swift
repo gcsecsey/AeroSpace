@@ -100,6 +100,44 @@ final class DumpAxTabsTest: XCTestCase {
         assertEquals(result["groups"]?.asArrayOrDie.first?.asDictOrDie["path"], .array([.int(1)]))
     }
 
+    func testTabEvidenceDoesNotPreemptAQueuedShallowGroup() {
+        let reader = StubAxTabReader(nodes: [
+            0: .init(
+                attributes: [kAXRoleAttribute: .string(kAXWindowRole)],
+                elements: [kAXChildrenAttribute: [1, 2]],
+            ),
+            1: .init(
+                attributes: [kAXRoleAttribute: .string(kAXTabGroupRole)],
+                elements: [
+                    kAXChildrenAttribute: [3],
+                    kAXTabsAttribute: [3],
+                    kAXSelectedChildrenAttribute: [],
+                ],
+            ),
+            2: .init(
+                attributes: [kAXRoleAttribute: .string(kAXTabGroupRole)],
+                elements: [
+                    kAXChildrenAttribute: [],
+                    kAXTabsAttribute: [],
+                    kAXSelectedChildrenAttribute: [],
+                ],
+            ),
+            3: .init(
+                attributes: [kAXRoleAttribute: .string(kAXRadioButtonRole)],
+                elements: [kAXChildrenAttribute: []],
+            ),
+        ])
+
+        let result = dumpAxTabs(root: 0, reader: reader, limits: .init(maxNodes: 3))
+
+        assertEquals(result["visitedNodeCount"], .int(3))
+        assertEquals(result["truncated"], .bool(true))
+        assertEquals(
+            result["groups"]?.asArrayOrDie.map { $0.asDictOrDie["path"].orDie() },
+            [.array([.int(0)]), .array([.int(1)])],
+        )
+    }
+
     func testStopsAtNodeLimit() {
         let reader = StubAxTabReader(nodes: [
             0: .init(
@@ -260,6 +298,44 @@ final class DumpAxTabsTest: XCTestCase {
         assertEquals(result["failures"], .array([]))
     }
 
+    func testClassifiesTraversalChildrenErrors() {
+        for leafError in [AXError.noValue.repr, AXError.attributeUnsupported.repr] {
+            let reader = StubAxTabReader(nodes: [
+                0: .init(
+                    attributes: [kAXRoleAttribute: .string(kAXWindowRole)],
+                    elements: [:],
+                    elementErrors: [kAXChildrenAttribute: leafError],
+                ),
+            ])
+
+            let result = dumpAxTabs(root: 0, reader: reader)
+
+            assertEquals(result["failureCount"], .int(0))
+            assertEquals(result["failures"], .array([]))
+        }
+
+        let failedReader = StubAxTabReader(nodes: [
+            0: .init(
+                attributes: [kAXRoleAttribute: .string(kAXWindowRole)],
+                elements: [:],
+                elementErrors: [kAXChildrenAttribute: AXError.cannotComplete.repr],
+            ),
+        ])
+
+        let failedResult = dumpAxTabs(root: 0, reader: failedReader)
+
+        assertEquals(failedResult["failureCount"], .int(1))
+        assertEquals(
+            failedResult["failures"],
+            .array([failureJson(
+                path: [],
+                operation: "readAttribute",
+                attribute: kAXChildrenAttribute,
+                error: AXError.cannotComplete.repr,
+            )]),
+        )
+    }
+
     func testKeepsUnmatchedAXTabsWithNullChildIndex() {
         let reader = StubAxTabReader(nodes: [
             0: .init(
@@ -374,7 +450,9 @@ private struct StubAxTabReader: AxTabReading {
     }
 
     func elements(of node: Int, attribute: String) -> AxTabRead<[Int]> {
-        nodes[node].orDie().elements[attribute]
+        let node = nodes[node].orDie()
+        if let error = node.elementErrors[attribute] { return .failure(error) }
+        return node.elements[attribute]
             .map(AxTabRead.success)
             ?? .failure("attributeUnsupported")
     }
@@ -390,6 +468,7 @@ private struct StubAxNode {
     var attributeNames: [String]
     var actionNames: [String]
     var windowId: UInt32?
+    var elementErrors: [String: String]
     var attributeNamesError: String?
     var actionNamesError: String?
 
@@ -399,6 +478,7 @@ private struct StubAxNode {
         attributeNames: [String]? = nil,
         actionNames: [String] = [],
         windowId: UInt32? = nil,
+        elementErrors: [String: String] = [:],
         attributeNamesError: String? = nil,
         actionNamesError: String? = nil,
     ) {
@@ -407,6 +487,7 @@ private struct StubAxNode {
         self.attributeNames = attributeNames ?? Array(attributes.keys) + Array(elements.keys)
         self.actionNames = actionNames
         self.windowId = windowId
+        self.elementErrors = elementErrors
         self.attributeNamesError = attributeNamesError
         self.actionNamesError = actionNamesError
     }
