@@ -42,6 +42,43 @@ func dumpAxTabs(_ root: AXUIElement) -> [String: Json] {
     dumpAxTabs(root: LiveAxTabNode(root), reader: LiveAxTabReader())
 }
 
+func hasNativeWindowTabs(_ root: AXUIElement) -> Bool {
+    hasNativeWindowTabs(root: LiveAxTabNode(root), reader: LiveAxTabReader())
+}
+
+func hasNativeWindowTabs<Reader: AxTabReading>(
+    root: Reader.Node,
+    reader: Reader,
+    limits: AxTabDumpLimits = .init(),
+) -> Bool {
+    guard limits.maxNodes > 0 else { return false }
+    var queue: [(node: Reader.Node, depth: Int)] = [(root, 0)]
+    var scheduled: Set<Reader.Node> = [root]
+    var nextIndex = 0
+    while nextIndex < queue.count {
+        let (node, depth) = queue[nextIndex]
+        nextIndex += 1
+
+        if case .success(.string(kAXTabGroupRole)) = reader.jsonValue(of: node, attribute: kAXRoleAttribute),
+           case .success(let tabs) = reader.elements(of: node, attribute: kAXTabsAttribute),
+           tabs.count >= 2
+        {
+            return true
+        }
+        guard depth < limits.maxDepth,
+              case .success(let children) = reader.elements(of: node, attribute: kAXChildrenAttribute)
+        else {
+            continue
+        }
+        for child in children where !scheduled.contains(child) {
+            guard scheduled.count < limits.maxNodes else { break }
+            scheduled.insert(child)
+            queue.append((child, depth + 1))
+        }
+    }
+    return false
+}
+
 func axTabJsonValue(_ value: Any?) -> Json {
     guard let value else { return .null }
     if let scalar = Json.newScalarOrNil(value) { return scalar }

@@ -16,9 +16,33 @@ final class MacWindow: Window {
 
     @MainActor
     @discardableResult
-    static func getOrRegister(windowId: UInt32, macApp: MacApp) async throws -> MacWindow {
-        if let existing = allWindowsMap[windowId] { return existing }
+    static func getOrRegister(
+        windowId: UInt32,
+        macApp: MacApp,
+        replacingNativeTabWindowId: UInt32? = nil,
+    ) async throws -> MacWindow {
+        if let existing = allWindowsMap[windowId] {
+            if let replacement = replaceNativeTabWindowIfNeeded(
+                windowId: windowId,
+                macApp: macApp,
+                rect: nil,
+                replacingWindowId: replacingNativeTabWindowId,
+            ) {
+                try await debugWindowsIfRecording(replacement, .cancellable)
+                return replacement
+            }
+            return existing
+        }
         let rect = try await macApp.getAxRect(windowId, .cancellable)
+        if let replacement = replaceNativeTabWindowIfNeeded(
+            windowId: windowId,
+            macApp: macApp,
+            rect: rect,
+            replacingWindowId: replacingNativeTabWindowId,
+        ) {
+            try await debugWindowsIfRecording(replacement, .cancellable)
+            return replacement
+        }
         let data = try await unbindAndGetBindingDataForNewWindow(
             windowId,
             macApp,
@@ -30,7 +54,27 @@ final class MacWindow: Window {
         )
 
         // atomic synchronous section
-        if let existing = allWindowsMap[windowId] { return existing }
+        if let existing = allWindowsMap[windowId] {
+            if let replacement = replaceNativeTabWindowIfNeeded(
+                windowId: windowId,
+                macApp: macApp,
+                rect: nil,
+                replacingWindowId: replacingNativeTabWindowId,
+            ) {
+                try await debugWindowsIfRecording(replacement, .cancellable)
+                return replacement
+            }
+            return existing
+        }
+        if let replacement = replaceNativeTabWindowIfNeeded(
+            windowId: windowId,
+            macApp: macApp,
+            rect: rect,
+            replacingWindowId: replacingNativeTabWindowId,
+        ) {
+            try await debugWindowsIfRecording(replacement, .cancellable)
+            return replacement
+        }
         let window = MacWindow(windowId, macApp, lastFloatingSize: rect?.size, parent: data.parent, adaptiveWeight: data.adaptiveWeight, index: data.index)
         allWindowsMap[windowId] = window
 
@@ -39,6 +83,40 @@ final class MacWindow: Window {
             await tryOnWindowDetected(window)
         }
         return window
+    }
+
+    @MainActor
+    private static func replaceNativeTabWindowIfNeeded(
+        windowId: UInt32,
+        macApp: MacApp,
+        rect: Rect?,
+        replacingWindowId: UInt32?,
+    ) -> MacWindow? {
+        guard let replacingWindowId,
+              let oldWindow = allWindowsMap[replacingWindowId],
+              oldWindow.macApp === macApp,
+              oldWindow.isBound
+        else {
+            return nil
+        }
+
+        let replacement = allWindowsMap[windowId] ?? MacWindow(
+            windowId,
+            macApp,
+            lastFloatingSize: rect?.size,
+            parent: NilTreeNode.instance,
+            adaptiveWeight: WEIGHT_AUTO,
+            index: INDEX_BIND_LAST,
+        )
+        guard replacement.macApp === macApp else { return nil }
+        let prevUnhiddenPosition = oldWindow.prevUnhiddenProportionalPositionInsideWorkspaceRect
+        replaceNativeTabWindowInTree(oldWindow, with: replacement)
+        replacement.prevUnhiddenProportionalPositionInsideWorkspaceRect = prevUnhiddenPosition
+        allWindowsMap.removeValue(forKey: replacingWindowId)
+        allWindowsMap[replacement.windowId] = replacement
+        macApp.cancelSetFrameJob(for: replacingWindowId)
+        macApp.didReplaceNativeTabWindow(replacingWindowId, with: replacement.windowId)
+        return replacement
     }
 
     // var description: String {
@@ -200,6 +278,59 @@ final class MacWindow: Window {
 
     override func getAxRect(_ cm: CancellationMode) async throws -> Rect? {
         try await macApp.getAxRect(windowId, cm)
+    }
+}
+
+func nativeTabReplacementWindowId(
+    focusedWindowId: UInt32,
+    previousFocusedWindowId: UInt32?,
+    hasNativeWindowTabs: Bool,
+    onScreenWindowIds: Set<UInt32>,
+    focusedRect: Rect?,
+    previousRect: Rect?,
+) -> UInt32? {
+    guard hasNativeWindowTabs,
+          let previousFocusedWindowId,
+          previousFocusedWindowId != focusedWindowId,
+          onScreenWindowIds.contains(focusedWindowId),
+          !onScreenWindowIds.contains(previousFocusedWindowId),
+          let focusedRect,
+          let previousRect,
+          focusedRect.isApproximatelyEqual(to: previousRect)
+    else {
+        return nil
+    }
+    return previousFocusedWindowId
+}
+
+@MainActor
+func replaceNativeTabWindowInTree(_ oldWindow: Window, with replacement: Window) {
+    check(oldWindow !== replacement)
+    if replacement.isBound {
+        replacement.unbindFromParent()
+    }
+    let bindingData = oldWindow.unbindFromParent()
+
+    replacement.lastFloatingSize = oldWindow.lastFloatingSize ?? replacement.lastFloatingSize
+    replacement.isFullscreen = oldWindow.isFullscreen
+    replacement.noOuterGapsInFullscreen = oldWindow.noOuterGapsInFullscreen
+    replacement.layoutReason = oldWindow.layoutReason
+    replacement.lastAppliedLayoutVirtualRect = oldWindow.lastAppliedLayoutVirtualRect
+    replacement.lastAppliedLayoutPhysicalRect = oldWindow.lastAppliedLayoutPhysicalRect
+    replacement.bind(
+        to: bindingData.parent,
+        adaptiveWeight: bindingData.adaptiveWeight,
+        index: bindingData.index,
+    )
+}
+
+extension Rect {
+    fileprivate func isApproximatelyEqual(to other: Rect) -> Bool {
+        let tolerance = CGFloat(2)
+        return abs(topLeftX - other.topLeftX) <= tolerance &&
+            abs(topLeftY - other.topLeftY) <= tolerance &&
+            abs(width - other.width) <= tolerance &&
+            abs(height - other.height) <= tolerance
     }
 }
 

@@ -3,6 +3,88 @@ import Common
 import XCTest
 
 final class DumpAxTabsTest: XCTestCase {
+    func testNativeWindowTabsRequireAtLeastTwoTabs() {
+        let reader = StubAxTabReader(nodes: [
+            0: .init(
+                attributes: [kAXRoleAttribute: .string(kAXWindowRole)],
+                elements: [kAXChildrenAttribute: [1]],
+            ),
+            1: .init(
+                attributes: [kAXRoleAttribute: .string(kAXTabGroupRole)],
+                elements: [
+                    kAXChildrenAttribute: [2, 3],
+                    kAXTabsAttribute: [2, 3],
+                ],
+            ),
+            2: .init(
+                attributes: [kAXRoleAttribute: .string(kAXRadioButtonRole)],
+                elements: [kAXChildrenAttribute: []],
+            ),
+            3: .init(
+                attributes: [kAXRoleAttribute: .string(kAXRadioButtonRole)],
+                elements: [kAXChildrenAttribute: []],
+            ),
+        ])
+
+        XCTAssertTrue(hasNativeWindowTabs(root: 0, reader: reader))
+    }
+
+    func testSingleTabGroupIsNotNativeWindowTabReplacementEvidence() {
+        let reader = StubAxTabReader(nodes: [
+            0: .init(
+                attributes: [kAXRoleAttribute: .string(kAXWindowRole)],
+                elements: [kAXChildrenAttribute: [1]],
+            ),
+            1: .init(
+                attributes: [kAXRoleAttribute: .string(kAXTabGroupRole)],
+                elements: [
+                    kAXChildrenAttribute: [2],
+                    kAXTabsAttribute: [2],
+                ],
+            ),
+            2: .init(
+                attributes: [kAXRoleAttribute: .string(kAXRadioButtonRole)],
+                elements: [kAXChildrenAttribute: []],
+            ),
+        ])
+
+        XCTAssertFalse(hasNativeWindowTabs(root: 0, reader: reader))
+    }
+
+    func testNativeTabDetectionChecksQueuedShallowNodesAtNodeLimit() {
+        let reader = StubAxTabReader(nodes: [
+            0: .init(
+                attributes: [kAXRoleAttribute: .string(kAXWindowRole)],
+                elements: [kAXChildrenAttribute: [1, 2]],
+            ),
+            1: .init(
+                attributes: [kAXRoleAttribute: .string(kAXGroupRole)],
+                elements: [kAXChildrenAttribute: [3]],
+            ),
+            2: .init(
+                attributes: [kAXRoleAttribute: .string(kAXTabGroupRole)],
+                elements: [
+                    kAXChildrenAttribute: [],
+                    kAXTabsAttribute: [4, 5],
+                ],
+            ),
+            3: .init(
+                attributes: [kAXRoleAttribute: .string(kAXGroupRole)],
+                elements: [kAXChildrenAttribute: []],
+            ),
+            4: .init(
+                attributes: [kAXRoleAttribute: .string(kAXRadioButtonRole)],
+                elements: [kAXChildrenAttribute: []],
+            ),
+            5: .init(
+                attributes: [kAXRoleAttribute: .string(kAXRadioButtonRole)],
+                elements: [kAXChildrenAttribute: []],
+            ),
+        ])
+
+        XCTAssertTrue(hasNativeWindowTabs(root: 0, reader: reader, limits: .init(maxNodes: 3)))
+    }
+
     func testFindsNestedTabGroupAndCorrelatesSelectedChild() {
         let reader = StubAxTabReader(nodes: [
             0: .init(

@@ -1,6 +1,24 @@
 import AppKit
 import Common
 
+struct NativeTabWindowIds {
+    private var inactive: Set<UInt32> = []
+
+    mutating func didReplace(_ oldWindowId: UInt32, with focusedWindowId: UInt32) {
+        inactive.insert(oldWindowId)
+        inactive.remove(focusedWindowId)
+    }
+
+    mutating func didFocus(_ windowId: UInt32) {
+        inactive.remove(windowId)
+    }
+
+    mutating func modelWindowIds(from aliveWindowIds: [UInt32], deadWindowIds: [UInt32]) -> [UInt32] {
+        inactive.subtract(deadWindowIds)
+        return aliveWindowIds.filter { !inactive.contains($0) }
+    }
+}
+
 // Potential alternative implementation
 // https://github.com/swiftlang/swift-evolution/blob/main/proposals/0392-custom-actor-executors.md
 // (only available since macOS 14)
@@ -14,6 +32,7 @@ final class MacApp: AbstractApp {
     private let windows: ThreadGuardedValue<[UInt32: AxWindow]> = .init([:])
     private var windowsCount = 0
     var lastNativeFocusedWindowId: UInt32? = nil
+    private var nativeTabWindowIds = NativeTabWindowIds()
     private var thread: Thread?
     private var setFrameJobs: [UInt32: RunLoopJob] = [:]
     @MainActor private static var focusJob: RunLoopJob? = nil
@@ -110,6 +129,14 @@ final class MacApp: AbstractApp {
         }
     }
 
+    func cancelSetFrameJob(for windowId: UInt32) {
+        setFrameJobs.removeValue(forKey: windowId)?.cancel()
+    }
+
+    func didReplaceNativeTabWindow(_ oldWindowId: UInt32, with focusedWindowId: UInt32) {
+        nativeTabWindowIds.didReplace(oldWindowId, with: focusedWindowId)
+    }
+
     func getAxSize(_ windowId: UInt32, _ cm: CancellationMode) async throws -> CGSize? {
         try await withWindow(windowId, cm) { window, job in
             window.get(Ax.sizeAttr)
@@ -118,13 +145,46 @@ final class MacApp: AbstractApp {
 
     // todo merge together with detectNewWindows
     func getFocusedWindow(_ cm: CancellationMode) async throws -> Window? {
+        let previousFocusedWindowId = lastNativeFocusedWindowId
         let windowId = try await thread?.runInLoop(cm) { [nsApp, axApp, windows] job in
             try axApp.threadGuarded.get(Ax.focusedWindowAttr)
                 .flatMap { try windows.threadGuarded.getOrRegisterAxWindow(windowId: $0.windowId, $0.ax.cast, nsApp, job) }?
                 .windowId
         }
         guard let windowId else { return nil }
-        return try await MacWindow.getOrRegister(windowId: windowId, macApp: self)
+        nativeTabWindowIds.didFocus(windowId)
+
+        let replacingNativeTabWindowId: UInt32?
+        if let previousFocusedWindowId,
+           let previousWindow = MacWindow.allWindowsMap[previousFocusedWindowId],
+           previousWindow.macApp === self
+        {
+            let onScreenWindowIds = getOnScreenWindowIds()
+            let focusedRect = try? await getAxRect(windowId, cm)
+            let previousRect = try? await getAxRect(previousFocusedWindowId, cm)
+            let likelyReplacement = nativeTabReplacementWindowId(
+                focusedWindowId: windowId,
+                previousFocusedWindowId: previousFocusedWindowId,
+                hasNativeWindowTabs: true,
+                onScreenWindowIds: onScreenWindowIds,
+                focusedRect: focusedRect,
+                previousRect: previousRect,
+            )
+            if likelyReplacement != nil,
+               (try? await windowHasNativeTabs(windowId, cm)) == true
+            {
+                replacingNativeTabWindowId = likelyReplacement
+            } else {
+                replacingNativeTabWindowId = nil
+            }
+        } else {
+            replacingNativeTabWindowId = nil
+        }
+        return try await MacWindow.getOrRegister(
+            windowId: windowId,
+            macApp: self,
+            replacingNativeTabWindowId: replacingNativeTabWindowId,
+        )
     }
 
     @MainActor func nativeFocus(_ windowId: UInt32) {
@@ -238,6 +298,12 @@ final class MacApp: AbstractApp {
         } ?? [:]
     }
 
+    private func windowHasNativeTabs(_ windowId: UInt32, _ cm: CancellationMode) async throws -> Bool {
+        try await withWindow(windowId, cm) { window, job in
+            hasNativeWindowTabs(window)
+        } ?? false
+    }
+
     func dumpAppAxInfo(_ cm: CancellationMode) async throws -> [String: Json] {
         try await thread?.runInLoop(cm) { [axApp] job in
             dumpAxRecursive(axApp.threadGuarded, .app)
@@ -329,11 +395,12 @@ final class MacApp: AbstractApp {
             windows.threadGuarded = alive
             return (Array(alive.keys), Array(dead.keys))
         }
-        windowsCount = alive.count
+        let modelWindowIds = nativeTabWindowIds.modelWindowIds(from: alive, deadWindowIds: dead)
+        windowsCount = modelWindowIds.count
         for windowId in dead {
             setFrameJobs.removeValue(forKey: windowId)?.cancel()
         }
-        return alive
+        return modelWindowIds
     }
 
     private func destroy() async {
