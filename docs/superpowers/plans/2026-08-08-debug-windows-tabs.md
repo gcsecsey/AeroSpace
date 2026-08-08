@@ -4,7 +4,7 @@
 
 **Goal:** Add a bounded, one-shot `aerospace debug-windows --tabs [--window-id ID]` diagnostic that exposes native macOS Accessibility tab structures without changing window-management behavior.
 
-**Architecture:** Keep the existing recursive AX dump unchanged. Add a testable, generic tab-tree walker with a live `AXUIElement` reader, run it on each application's AX thread, and route the new CLI flag to a small tab-specific JSON formatter. The walker uses ordered depth-first traversal, element identity, depth/node limits, and structured per-operation failures.
+**Architecture:** Keep the existing recursive AX dump unchanged. Add a testable, generic tab-tree walker with a live `AXUIElement` reader, run it on each application's AX thread, and route the new CLI flag to a small tab-specific JSON formatter. The walker uses ordered breadth-first traversal, element identity, depth/node limits, and bounded structured per-operation failures.
 
 **Tech Stack:** Swift 6.2+, AppKit Accessibility (`AXUIElement`), Swift Package Manager, XCTest, AsciiDoc, AeroSpace's `CmdArgs` and `Json` types.
 
@@ -18,6 +18,9 @@
 - Accessibility failures are recorded per operation; only failure to access the root window is fatal.
 - Do not copy or adapt GPL-licensed AltTab implementation code.
 - Do not add event observation, hit-testing, Core Graphics inventory, ScreenCaptureKit, private SkyLight APIs, or application-specific adapters.
+- Traverse shallow AX nodes before deeper document contents.
+- Treat `noValue` and `attributeUnsupported` from traversal `AXChildren` reads as ordinary leaves.
+- Emit at most 20 failure details while retaining total and omitted counts.
 
 ---
 
@@ -175,13 +178,14 @@ Expected: compilation fails because the reader protocol, result type, limits, an
 Create the types named above. The walker must:
 
 ```text
-visit root at path []
-read AXRole and AXChildren
+enqueue root at path []
+read AXRole and AXChildren from each dequeued node
 when role == AXTabGroup, build a group snapshot
-visit children depth-first in their original order
+enqueue children breadth-first in their original order
 summarize relationship elements and correlate them by Node equality
 sort attribute and action names
-emit visitedNodeCount, truncated, truncationReasons, groups, failures
+emit visitedNodeCount, truncated, truncationReasons, groups, failureCount,
+omittedFailureCount, and capped failures
 ```
 
 Group snapshots use these exact keys: `path`, `windowId`, `role`, `subrole`, `title`, `identifier`, `description`, `value`, `attributeNames`, `actionNames`, `tabs`, `selectedChildren`, and `children`. Referenced/direct element snapshots use `childIndex`, `windowId`, `role`, `subrole`, `title`, `identifier`, `description`, `value`, `selected`, `attributeNames`, and `actionNames`. Missing optional values encode as `.null`.
@@ -219,7 +223,7 @@ Represent a failure as:
 ]
 ```
 
-Deduplicate truncation reasons. Sort failures lexicographically by path, operation, attribute, and error. Preserve group/child DFS order. Skip already visited nodes. Cap fallback textual descriptions at 512 characters and append an explicit truncation marker.
+Deduplicate truncation reasons. Sort failures lexicographically by path, operation, attribute, and error. Preserve group breadth-first order and direct-child order. Skip already visited nodes. Treat `noValue` and `attributeUnsupported` from traversal `AXChildren` reads as leaves without recording failures. Cap failure details at 20 while retaining total and omitted counts. Cap fallback textual descriptions at 512 characters and append an explicit truncation marker.
 
 - [ ] **Step 7: Add the live AX reader and verify compilation**
 

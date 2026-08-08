@@ -95,8 +95,10 @@ it means the bounded traversal did not find an element whose role is
 ## Traversal
 
 Start at the selected window's `AXUIElement`. Traverse `AXChildren` in
-depth-first order while preserving child order. Use child-index paths such as
-`[0, 2, 1]` to identify where a discovered group lives beneath the window root.
+breadth-first order while preserving child order within each depth. This makes
+window chrome observable before large document contents such as Finder file
+rows consume the node budget. Use child-index paths such as `[0, 2, 1]` to
+identify where a discovered group lives beneath the window root.
 
 Apply both of these hard bounds:
 
@@ -109,9 +111,10 @@ each reached bound. Keep a best-effort set of already visited AX elements to
 avoid repeatedly traversing a cycle; the node limit remains the final safety
 guard.
 
-Failure to read `AXChildren` from one element is recorded and does not abort
-other branches. Unsupported or absent children are treated as a leaf after the
-failure is recorded.
+A non-leaf failure to read `AXChildren` from one element is recorded and does
+not abort other branches. `noValue` and `attributeUnsupported` are ordinary
+leaf results for the traversal relationship and are not recorded as failures;
+other AX errors remain diagnostic failures.
 
 ## Captured tab evidence
 
@@ -162,6 +165,11 @@ A per-attribute failure must not abort the whole dump. Failure to access the
 selected root window is fatal and follows the existing `debug-windows` bug
 prompt path.
 
+To keep reports usable for large accessibility trees, the dump includes the
+total failure count but emits at most 20 sorted failure details. It reports how
+many details were omitted. This bound affects only diagnostics, not traversal
+or tab-group discovery.
+
 ## Code organization
 
 Expected changes are intentionally narrow:
@@ -196,7 +204,10 @@ Automated tests should cover:
 - unsupported attributes and per-node AX failures;
 - a cyclic graph;
 - depth-limit and node-limit truncation;
-- stable ordering of groups, children, attributes, actions, and failures.
+- stable breadth-first ordering of groups, plus stable ordering of children,
+  attributes, actions, and failures;
+- ordinary leaf `AXChildren` results do not create failure noise;
+- failure totals remain accurate when detail snapshots are capped.
 
 Manual validation should run the built command against at least one native
 AppKit-tabbed window and one non-tabbed window. The report should confirm that
