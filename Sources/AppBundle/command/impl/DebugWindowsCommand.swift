@@ -19,58 +19,76 @@ enum DebugWindowsState {
     case recordingAborted
 }
 
+enum DebugWindowsMode: Equatable {
+    case interactive
+    case window(UInt32)
+    case tabs(UInt32?)
+}
+
+extension DebugWindowsCmdArgs {
+    var mode: DebugWindowsMode {
+        if tabs { return .tabs(windowId) }
+        if let windowId { return .window(windowId) }
+        return .interactive
+    }
+}
+
 struct DebugWindowsCommand: Command {
     let args: DebugWindowsCmdArgs
     /*conforms*/ let shouldResetClosedWindowsCache = false
 
     func run(_ env: CmdEnv, _ io: CmdIo) async -> BinaryExitCode {
-        if let windowId = args.windowId {
-            guard let window = Window.get(byId: windowId) else {
-                return .fail(io.err("Can't find window with the specified window-id: \(windowId)"))
-            }
-            guard let a = try? await dumpWindowDebugInfo(window, .nonCancellable) else { return .fail(io.err(bugPrompt())) }
-            io.out(a + "\n")
-            io.out(disclaimer)
-            return .succ
-        }
-        switch debugWindowsState {
-            case .recording:
-                debugWindowsState = .notRecording
-                io.out(debugWindowsLog.values.joined(separator: "\n\n"))
-                io.out("\n" + disclaimer + "\n")
-                io.out("Debug session finished" + "\n")
-                debugWindowsLog = [:]
-                return .succ
-            case .notRecording:
-                debugWindowsState = .recording
-                debugWindowsLog = [:]
-                io.out(
-                    """
-                    Debug windows session has started
-                    1. Focus the problematic window
-                    2. Run 'aerospace debug-windows' once again to finish the session and get the results
-                    """,
-                )
-                // Make sure that the Terminal window that started the recording is recorded first
-                guard let target = args.resolveTargetOrReportError(env, io) else { return .fail }
-                if let window = target.windowOrNil {
-                    do {
-                        try await debugWindowsIfRecording(window, .nonCancellable)
-                    } catch {
-                        return .fail(io.err(bugPrompt(String(describing: error))))
-                    }
+        switch args.mode {
+            case .tabs:
+                return .fail(io.err(bugPrompt("Tab diagnostics are not implemented")))
+            case .window(let windowId):
+                guard let window = Window.get(byId: windowId) else {
+                    return .fail(io.err("Can't find window with the specified window-id: \(windowId)"))
                 }
+                guard let a = try? await dumpWindowDebugInfo(window, .nonCancellable) else { return .fail(io.err(bugPrompt())) }
+                io.out(a + "\n")
+                io.out(disclaimer)
                 return .succ
-            case .recordingAborted:
-                io.out(
-                    """
-                    Recording of the previous session was aborted after \(debugWindowsLimit) windows has been focused
-                    Run the command one more time to start new debug session
-                    """,
-                )
-                debugWindowsState = .notRecording
-                debugWindowsLog = [:]
-                return .fail
+            case .interactive:
+                switch debugWindowsState {
+                    case .recording:
+                        debugWindowsState = .notRecording
+                        io.out(debugWindowsLog.values.joined(separator: "\n\n"))
+                        io.out("\n" + disclaimer + "\n")
+                        io.out("Debug session finished" + "\n")
+                        debugWindowsLog = [:]
+                        return .succ
+                    case .notRecording:
+                        debugWindowsState = .recording
+                        debugWindowsLog = [:]
+                        io.out(
+                            """
+                            Debug windows session has started
+                            1. Focus the problematic window
+                            2. Run 'aerospace debug-windows' once again to finish the session and get the results
+                            """,
+                        )
+                        // Make sure that the Terminal window that started the recording is recorded first
+                        guard let target = args.resolveTargetOrReportError(env, io) else { return .fail }
+                        if let window = target.windowOrNil {
+                            do {
+                                try await debugWindowsIfRecording(window, .nonCancellable)
+                            } catch {
+                                return .fail(io.err(bugPrompt(String(describing: error))))
+                            }
+                        }
+                        return .succ
+                    case .recordingAborted:
+                        io.out(
+                            """
+                            Recording of the previous session was aborted after \(debugWindowsLimit) windows has been focused
+                            Run the command one more time to start new debug session
+                            """,
+                        )
+                        debugWindowsState = .notRecording
+                        debugWindowsLog = [:]
+                        return .fail
+                    }
         }
     }
 }
