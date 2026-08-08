@@ -16,9 +16,28 @@ final class MacWindow: Window {
 
     @MainActor
     @discardableResult
-    static func getOrRegister(windowId: UInt32, macApp: MacApp) async throws -> MacWindow {
-        if let existing = allWindowsMap[windowId] { return existing }
+    static func getOrRegister(
+        windowId: UInt32,
+        macApp: MacApp,
+        replacingNativeTabWindowId: UInt32? = nil,
+    ) async throws -> MacWindow {
+        if let existing = getExistingOrReplaceNativeTabWindow(
+            windowId: windowId,
+            macApp: macApp,
+            rect: nil,
+            replacingWindowId: replacingNativeTabWindowId,
+        ) {
+            return existing
+        }
         let rect = try await macApp.getAxRect(windowId, .cancellable)
+        if let existing = getExistingOrReplaceNativeTabWindow(
+            windowId: windowId,
+            macApp: macApp,
+            rect: rect,
+            replacingWindowId: replacingNativeTabWindowId,
+        ) {
+            return existing
+        }
         let data = try await unbindAndGetBindingDataForNewWindow(
             windowId,
             macApp,
@@ -30,7 +49,14 @@ final class MacWindow: Window {
         )
 
         // atomic synchronous section
-        if let existing = allWindowsMap[windowId] { return existing }
+        if let existing = getExistingOrReplaceNativeTabWindow(
+            windowId: windowId,
+            macApp: macApp,
+            rect: rect,
+            replacingWindowId: replacingNativeTabWindowId,
+        ) {
+            return existing
+        }
         let window = MacWindow(windowId, macApp, lastFloatingSize: rect?.size, parent: data.parent, adaptiveWeight: data.adaptiveWeight, index: data.index)
         allWindowsMap[windowId] = window
 
@@ -39,6 +65,39 @@ final class MacWindow: Window {
             await tryOnWindowDetected(window)
         }
         return window
+    }
+
+    @MainActor
+    private static func getExistingOrReplaceNativeTabWindow(
+        windowId: UInt32,
+        macApp: MacApp,
+        rect: Rect?,
+        replacingWindowId: UInt32?,
+    ) -> MacWindow? {
+        guard let replacingWindowId,
+              let oldWindow = allWindowsMap[replacingWindowId],
+              oldWindow.macApp === macApp,
+              oldWindow.isBound
+        else {
+            return allWindowsMap[windowId]
+        }
+
+        let replacement = allWindowsMap[windowId] ?? MacWindow(
+            windowId,
+            macApp,
+            lastFloatingSize: rect?.size,
+            parent: NilTreeNode.instance,
+            adaptiveWeight: WEIGHT_AUTO,
+            index: INDEX_BIND_LAST,
+        )
+        guard replacement.macApp === macApp else { return allWindowsMap[windowId] }
+        let prevUnhiddenPosition = oldWindow.prevUnhiddenProportionalPositionInsideWorkspaceRect
+        replaceNativeTabWindowInTree(oldWindow, with: replacement)
+        replacement.prevUnhiddenProportionalPositionInsideWorkspaceRect = prevUnhiddenPosition
+        allWindowsMap.removeValue(forKey: replacingWindowId)
+        allWindowsMap[windowId] = replacement
+        macApp.didReplaceNativeTabWindow(replacingWindowId, with: windowId)
+        return replacement
     }
 
     // var description: String {
