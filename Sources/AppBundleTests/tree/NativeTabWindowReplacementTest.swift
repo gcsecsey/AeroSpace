@@ -12,9 +12,11 @@ final class NativeTabWindowReplacementTest: XCTestCase {
 
     func testReplacedPhysicalTabIdStaysOutOfModelRefresh() {
         var ids = NativeTabWindowIds()
+        XCTAssertFalse(ids.requiresOnScreenWindowSnapshot)
 
         ids.didReplace(10, with: 20)
 
+        XCTAssertTrue(ids.requiresOnScreenWindowSnapshot)
         assertEquals(ids.modelWindowIds(from: [10, 20], deadWindowIds: []), [20])
     }
 
@@ -32,6 +34,7 @@ final class NativeTabWindowReplacementTest: XCTestCase {
         ids.didReplace(10, with: 20)
         _ = ids.modelWindowIds(from: [20], deadWindowIds: [10])
 
+        XCTAssertFalse(ids.requiresOnScreenWindowSnapshot)
         assertEquals(ids.modelWindowIds(from: [10, 20], deadWindowIds: []), [10, 20])
     }
 

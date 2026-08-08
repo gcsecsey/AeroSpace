@@ -3,6 +3,7 @@ import Common
 
 struct NativeTabWindowIds {
     private var inactive: Set<UInt32> = []
+    var requiresOnScreenWindowSnapshot: Bool { !inactive.isEmpty }
 
     mutating func didReplace(_ oldWindowId: UInt32, with focusedWindowId: UInt32) {
         inactive.insert(oldWindowId)
@@ -339,16 +340,16 @@ final class MacApp: AbstractApp {
     }
 
     @MainActor
-    static func refreshAllAndGetAliveWindowIds(
-        frontmostAppBundleId: String?,
-        onScreenWindowIds: Set<UInt32>?,
-    ) async throws -> [MacApp: [UInt32]] {
+    static func refreshAllAndGetAliveWindowIds(frontmostAppBundleId: String?) async throws -> [MacApp: [UInt32]] {
         for (_, app) in MacApp.allAppsMap { // gc dead apps
             try checkCancellation()
             if app.nsApp.isTerminated {
                 await app.destroy()
             }
         }
+        let onScreenWindowIds = allAppsMap.values.contains { $0.nativeTabWindowIds.requiresOnScreenWindowSnapshot }
+            ? getOnScreenWindowIds()
+            : nil
         return try await withThrowingTaskGroup(of: (pid_t, [UInt32]).self, returning: [MacApp: [UInt32]].self) { group in
             func refreshTheApp(_ nsApp: NSRunningApplication) {
                 group.addTask { @Sendable @MainActor in

@@ -162,6 +162,12 @@ private struct AxTabDumper<Reader: AxTabReading> {
             guard !traversedNodes.contains(node) else { continue }
             traversedNodes.insert(node)
             let role = readJson(node, attribute: kAXRoleAttribute, path: path)
+            if stopAtNativeWindowTabs,
+               role == .string(kAXTabGroupRole),
+               readElements(node, attribute: kAXTabsAttribute, path: path).count >= 2
+            {
+                return true
+            }
             let children = readTraversalChildren(node, path: path)
             if depth >= limits.maxDepth {
                 if !children.isEmpty {
@@ -174,14 +180,8 @@ private struct AxTabDumper<Reader: AxTabReading> {
                     }
                 }
             }
-            if role == .string(kAXTabGroupRole) {
-                if stopAtNativeWindowTabs {
-                    if readElements(node, attribute: kAXTabsAttribute, path: path).count >= 2 {
-                        return true
-                    }
-                } else {
-                    groups.append(.dict(groupSnapshot(node, path: path, role: role, children: children)))
-                }
+            if !stopAtNativeWindowTabs, role == .string(kAXTabGroupRole) {
+                groups.append(.dict(groupSnapshot(node, path: path, role: role, children: children)))
             }
         }
         return false
