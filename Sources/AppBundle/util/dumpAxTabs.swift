@@ -34,7 +34,7 @@ func dumpAxTabs<Reader: AxTabReading>(
     limits: AxTabDumpLimits = .init(),
 ) -> [String: Json] {
     var dumper = AxTabDumper(reader: reader, limits: limits)
-    dumper.visitBreadthFirst(root)
+    _ = dumper.visitBreadthFirst(root)
     return dumper.result
 }
 
@@ -51,32 +51,8 @@ func hasNativeWindowTabs<Reader: AxTabReading>(
     reader: Reader,
     limits: AxTabDumpLimits = .init(),
 ) -> Bool {
-    guard limits.maxNodes > 0 else { return false }
-    var queue: [(node: Reader.Node, depth: Int)] = [(root, 0)]
-    var scheduled: Set<Reader.Node> = [root]
-    var nextIndex = 0
-    while nextIndex < queue.count {
-        let (node, depth) = queue[nextIndex]
-        nextIndex += 1
-
-        if case .success(.string(kAXTabGroupRole)) = reader.jsonValue(of: node, attribute: kAXRoleAttribute),
-           case .success(let tabs) = reader.elements(of: node, attribute: kAXTabsAttribute),
-           tabs.count >= 2
-        {
-            return true
-        }
-        guard depth < limits.maxDepth,
-              case .success(let children) = reader.elements(of: node, attribute: kAXChildrenAttribute)
-        else {
-            continue
-        }
-        for child in children where !scheduled.contains(child) {
-            guard scheduled.count < limits.maxNodes else { break }
-            scheduled.insert(child)
-            queue.append((child, depth + 1))
-        }
-    }
-    return false
+    var dumper = AxTabDumper(reader: reader, limits: limits)
+    return dumper.visitBreadthFirst(root, stopAtNativeWindowTabs: true)
 }
 
 func axTabJsonValue(_ value: Any?) -> Json {
@@ -173,9 +149,12 @@ private struct AxTabDumper<Reader: AxTabReading> {
         ]
     }
 
-    mutating func visitBreadthFirst(_ root: Reader.Node) {
+    mutating func visitBreadthFirst(
+        _ root: Reader.Node,
+        stopAtNativeWindowTabs: Bool = false,
+    ) -> Bool {
         var queue: [(node: Reader.Node, path: [Int], depth: Int)] = []
-        guard schedule(root, path: [], depth: 0, queue: &queue) else { return }
+        guard schedule(root, path: [], depth: 0, queue: &queue) else { return false }
         var nextIndex = 0
         while nextIndex < queue.count {
             let (node, path, depth) = queue[nextIndex]
@@ -196,9 +175,16 @@ private struct AxTabDumper<Reader: AxTabReading> {
                 }
             }
             if role == .string(kAXTabGroupRole) {
-                groups.append(.dict(groupSnapshot(node, path: path, role: role, children: children)))
+                if stopAtNativeWindowTabs {
+                    if readElements(node, attribute: kAXTabsAttribute, path: path).count >= 2 {
+                        return true
+                    }
+                } else {
+                    groups.append(.dict(groupSnapshot(node, path: path, role: role, children: children)))
+                }
             }
         }
+        return false
     }
 
     mutating func schedule(

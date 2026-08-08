@@ -13,8 +13,15 @@ struct NativeTabWindowIds {
         inactive.remove(windowId)
     }
 
-    mutating func modelWindowIds(from aliveWindowIds: [UInt32], deadWindowIds: [UInt32]) -> [UInt32] {
-        inactive.subtract(deadWindowIds)
+    mutating func modelWindowIds(
+        from aliveWindowIds: [UInt32],
+        deadWindowIds: [UInt32],
+        onScreenWindowIds: Set<UInt32>? = nil,
+    ) -> [UInt32] {
+        inactive.subtract(Set(deadWindowIds).subtracting(aliveWindowIds))
+        if let onScreenWindowIds {
+            inactive.subtract(Set(aliveWindowIds).intersection(onScreenWindowIds))
+        }
         return aliveWindowIds.filter { !inactive.contains($0) }
     }
 }
@@ -156,10 +163,13 @@ final class MacApp: AbstractApp {
 
         let replacingNativeTabWindowId: UInt32?
         if let previousFocusedWindowId,
+           previousFocusedWindowId != windowId,
            let previousWindow = MacWindow.allWindowsMap[previousFocusedWindowId],
-           previousWindow.macApp === self
+           previousWindow.macApp === self,
+           let onScreenWindowIds = getOnScreenWindowIds(),
+           onScreenWindowIds.contains(windowId),
+           !onScreenWindowIds.contains(previousFocusedWindowId)
         {
-            let onScreenWindowIds = getOnScreenWindowIds()
             let focusedRect = try? await getAxRect(windowId, cm)
             let previousRect = try? await getAxRect(previousFocusedWindowId, cm)
             let likelyReplacement = nativeTabReplacementWindowId(
@@ -329,7 +339,10 @@ final class MacApp: AbstractApp {
     }
 
     @MainActor
-    static func refreshAllAndGetAliveWindowIds(frontmostAppBundleId: String?) async throws -> [MacApp: [UInt32]] {
+    static func refreshAllAndGetAliveWindowIds(
+        frontmostAppBundleId: String?,
+        onScreenWindowIds: Set<UInt32>?,
+    ) async throws -> [MacApp: [UInt32]] {
         for (_, app) in MacApp.allAppsMap { // gc dead apps
             try checkCancellation()
             if app.nsApp.isTerminated {
@@ -340,7 +353,13 @@ final class MacApp: AbstractApp {
             func refreshTheApp(_ nsApp: NSRunningApplication) {
                 group.addTask { @Sendable @MainActor in
                     guard let app = try await MacApp.getOrRegister(nsApp) else { return (nsApp.processIdentifier, []) }
-                    return (nsApp.processIdentifier, try await app.refreshAndGetAliveWindowIds(frontmostAppBundleId: frontmostAppBundleId))
+                    return (
+                        nsApp.processIdentifier,
+                        try await app.refreshAndGetAliveWindowIds(
+                            frontmostAppBundleId: frontmostAppBundleId,
+                            onScreenWindowIds: onScreenWindowIds,
+                        ),
+                    )
                 }
             }
             // Register new apps
@@ -369,7 +388,10 @@ final class MacApp: AbstractApp {
         }
     }
 
-    private func refreshAndGetAliveWindowIds(frontmostAppBundleId: String?) async throws -> [UInt32] {
+    private func refreshAndGetAliveWindowIds(
+        frontmostAppBundleId: String?,
+        onScreenWindowIds: Set<UInt32>?,
+    ) async throws -> [UInt32] {
         if nsApp.isTerminated {
             await destroy()
             return []
@@ -395,7 +417,11 @@ final class MacApp: AbstractApp {
             windows.threadGuarded = alive
             return (Array(alive.keys), Array(dead.keys))
         }
-        let modelWindowIds = nativeTabWindowIds.modelWindowIds(from: alive, deadWindowIds: dead)
+        let modelWindowIds = nativeTabWindowIds.modelWindowIds(
+            from: alive,
+            deadWindowIds: dead,
+            onScreenWindowIds: onScreenWindowIds,
+        )
         windowsCount = modelWindowIds.count
         for windowId in dead {
             setFrameJobs.removeValue(forKey: windowId)?.cancel()

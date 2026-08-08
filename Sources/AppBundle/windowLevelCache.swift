@@ -14,9 +14,8 @@ func getWindowLevel(for windowId: UInt32) -> MacOsWindowLevel? {
 }
 
 @MainActor
-func getOnScreenWindowIds() -> Set<UInt32> {
-    guard let levels = copyOnScreenWindowLevels() else { return [] }
-    return Set(levels.keys)
+func getOnScreenWindowIds() -> Set<UInt32>? {
+    copyOnScreenWindowLevels().map { Set($0.keys) }
 }
 
 private func copyOnScreenWindowLevels() -> [UInt32: MacOsWindowLevel]? {

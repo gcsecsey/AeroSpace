@@ -5,7 +5,10 @@ import XCTest
 final class NativeTabWindowReplacementTest: XCTestCase {
     private let matchingRect = Rect(topLeftX: 30, topLeftY: 34, width: 1668, height: 1082)
 
-    override func setUp() async throws { setUpWorkspacesForTests() }
+    override func setUp() async throws {
+        setUpWorkspacesForTests()
+        resetClosedWindowsCache()
+    }
 
     func testReplacedPhysicalTabIdStaysOutOfModelRefresh() {
         var ids = NativeTabWindowIds()
@@ -30,6 +33,41 @@ final class NativeTabWindowReplacementTest: XCTestCase {
         _ = ids.modelWindowIds(from: [20], deadWindowIds: [10])
 
         assertEquals(ids.modelWindowIds(from: [10, 20], deadWindowIds: []), [10, 20])
+    }
+
+    func testTabIdReportedAliveAndDeadRemainsSuppressed() {
+        var ids = NativeTabWindowIds()
+        ids.didReplace(10, with: 20)
+
+        assertEquals(ids.modelWindowIds(from: [10, 20], deadWindowIds: [10]), [20])
+    }
+
+    func testVisibleDetachedTabReturnsToModelWithoutFocus() {
+        var ids = NativeTabWindowIds()
+        ids.didReplace(10, with: 20)
+
+        assertEquals(
+            ids.modelWindowIds(
+                from: [10, 20],
+                deadWindowIds: [],
+                onScreenWindowIds: [10, 20],
+            ),
+            [10, 20],
+        )
+    }
+
+    func testMissingOnScreenSnapshotKeepsInactiveTabSuppressed() {
+        var ids = NativeTabWindowIds()
+        ids.didReplace(10, with: 20)
+
+        assertEquals(
+            ids.modelWindowIds(
+                from: [10, 20],
+                deadWindowIds: [],
+                onScreenWindowIds: nil,
+            ),
+            [20],
+        )
     }
 
     func testTreeReplacementPreservesExactSlotWeightAndLayoutState() {
@@ -59,6 +97,31 @@ final class NativeTabWindowReplacementTest: XCTestCase {
         assertEquals(replacement.lastAppliedLayoutPhysicalRect?.topLeftX, 5)
         assertEquals(replacement.lastAppliedLayoutPhysicalRect?.height, 8)
         XCTAssertFalse(oldWindow.isBound)
+    }
+
+    func testTreeReplacementPreservesUnknownFloatingSize() {
+        let root = Workspace.get(byName: name).rootTilingContainer
+        let oldWindow = TestWindow.new(id: 1, parent: root)
+        let replacement = TestWindow.new(id: 2, parent: root)
+        oldWindow.lastFloatingSize = nil
+        replacement.lastFloatingSize = CGSize(width: 640, height: 480)
+
+        replaceNativeTabWindowInTree(oldWindow, with: replacement)
+
+        XCTAssertNil(replacement.lastFloatingSize)
+    }
+
+    func testTreeReplacementInvalidatesClosedWindowsCache() async throws {
+        let root = Workspace.get(byName: name).rootTilingContainer
+        let oldWindow = TestWindow.new(id: 1, parent: root)
+        cacheClosedWindowIfNeeded()
+        let replacement = TestWindow.new(id: 2, parent: root)
+
+        replaceNativeTabWindowInTree(oldWindow, with: replacement)
+
+        let oldWindowDetectedAgain = TestWindow.new(id: 1, parent: root)
+        let restored = try await restoreClosedWindowsCacheIfNeeded(newlyDetectedWindow: oldWindowDetectedAgain)
+        XCTAssertFalse(restored)
     }
 
     func testSelectsPreviousOffScreenWindowWhenNativeTabFramesMatch() {

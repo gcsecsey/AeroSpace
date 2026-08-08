@@ -22,25 +22,23 @@ final class MacWindow: Window {
         replacingNativeTabWindowId: UInt32? = nil,
     ) async throws -> MacWindow {
         if let existing = allWindowsMap[windowId] {
-            if let replacement = replaceNativeTabWindowIfNeeded(
+            if let replacement = try await replaceNativeTabWindowAndRecordIfNeeded(
                 windowId: windowId,
                 macApp: macApp,
                 rect: nil,
                 replacingWindowId: replacingNativeTabWindowId,
             ) {
-                try await debugWindowsIfRecording(replacement, .cancellable)
                 return replacement
             }
             return existing
         }
         let rect = try await macApp.getAxRect(windowId, .cancellable)
-        if let replacement = replaceNativeTabWindowIfNeeded(
+        if let replacement = try await replaceNativeTabWindowAndRecordIfNeeded(
             windowId: windowId,
             macApp: macApp,
             rect: rect,
             replacingWindowId: replacingNativeTabWindowId,
         ) {
-            try await debugWindowsIfRecording(replacement, .cancellable)
             return replacement
         }
         let data = try await unbindAndGetBindingDataForNewWindow(
@@ -55,24 +53,22 @@ final class MacWindow: Window {
 
         // atomic synchronous section
         if let existing = allWindowsMap[windowId] {
-            if let replacement = replaceNativeTabWindowIfNeeded(
+            if let replacement = try await replaceNativeTabWindowAndRecordIfNeeded(
                 windowId: windowId,
                 macApp: macApp,
                 rect: nil,
                 replacingWindowId: replacingNativeTabWindowId,
             ) {
-                try await debugWindowsIfRecording(replacement, .cancellable)
                 return replacement
             }
             return existing
         }
-        if let replacement = replaceNativeTabWindowIfNeeded(
+        if let replacement = try await replaceNativeTabWindowAndRecordIfNeeded(
             windowId: windowId,
             macApp: macApp,
             rect: rect,
             replacingWindowId: replacingNativeTabWindowId,
         ) {
-            try await debugWindowsIfRecording(replacement, .cancellable)
             return replacement
         }
         let window = MacWindow(windowId, macApp, lastFloatingSize: rect?.size, parent: data.parent, adaptiveWeight: data.adaptiveWeight, index: data.index)
@@ -83,6 +79,25 @@ final class MacWindow: Window {
             await tryOnWindowDetected(window)
         }
         return window
+    }
+
+    @MainActor
+    private static func replaceNativeTabWindowAndRecordIfNeeded(
+        windowId: UInt32,
+        macApp: MacApp,
+        rect: Rect?,
+        replacingWindowId: UInt32?,
+    ) async throws -> MacWindow? {
+        guard let replacement = replaceNativeTabWindowIfNeeded(
+            windowId: windowId,
+            macApp: macApp,
+            rect: rect,
+            replacingWindowId: replacingWindowId,
+        ) else {
+            return nil
+        }
+        try await debugWindowsIfRecording(replacement, .cancellable)
+        return replacement
     }
 
     @MainActor
@@ -306,12 +321,13 @@ func nativeTabReplacementWindowId(
 @MainActor
 func replaceNativeTabWindowInTree(_ oldWindow: Window, with replacement: Window) {
     check(oldWindow !== replacement)
+    resetClosedWindowsCache()
     if replacement.isBound {
         replacement.unbindFromParent()
     }
     let bindingData = oldWindow.unbindFromParent()
 
-    replacement.lastFloatingSize = oldWindow.lastFloatingSize ?? replacement.lastFloatingSize
+    replacement.lastFloatingSize = oldWindow.lastFloatingSize
     replacement.isFullscreen = oldWindow.isFullscreen
     replacement.noOuterGapsInFullscreen = oldWindow.noOuterGapsInFullscreen
     replacement.layoutReason = oldWindow.layoutReason
